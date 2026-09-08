@@ -1,12 +1,16 @@
 name: "Merge Multi-Arch Manifest"
 description: "Collects per-architecture digests pushed by build-push (push-by-digest mode) and publishes them as a single tagged multi-arch manifest"
 inputs:
+  registry:
+    description: "Registry host for the primary login and push, e.g. us-central1-docker.pkg.dev. Leave empty for Docker Hub. The image reference itself comes from docker-image-owner, so set both when targeting another registry."
+    required: false
+    default: ""
   dockerhub-username:
     description: "The Dockerhub username"
-    required: true
+    required: false
   dockerhub-token:
     description: "The Dockerhub Token"
-    required: true
+    required: false
 
   private-registry-push:
     description: "Not supported yet in digest mode -- a digest is only addressable within the repository it was pushed to, so the per-architecture builds would have to push to the private registry as well."
@@ -69,9 +73,33 @@ runs:
         echo "pushed by digest into that registry too." >&2
         exit 1
 
-    - name: Login to Docker Hub
+    # A username without its token (or the reverse) is almost always a typo in a
+    # secret name: GitHub renders a missing secret as an empty string rather than
+    # failing, so the mistake is silent. Catch it here with a message that names the
+    # cause, instead of letting docker/login-action fail on an empty password or --
+    # worse -- skipping the login and surfacing it as a 401 on push much later.
+    # Values go through env rather than into the command line so the token is never
+    # interpolated into a shell argument.
+    - name: Validate registry credentials
+      shell: bash
+      env:
+        REGISTRY_USERNAME: ${{ inputs.dockerhub-username }}
+        REGISTRY_TOKEN: ${{ inputs.dockerhub-token }}
+      run: |
+        if [ -n "$REGISTRY_USERNAME" ] && [ -z "$REGISTRY_TOKEN" ]; then
+          echo "::error::A registry username was supplied without a token. Set both, or neither if the runner is already authenticated."
+          exit 1
+        fi
+        if [ -z "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_TOKEN" ]; then
+          echo "::error::A registry token was supplied without a username. Set both, or neither if the runner is already authenticated."
+          exit 1
+        fi
+
+    - name: Login to Registry
+      if: ${{ inputs.dockerhub-username != '' && inputs.dockerhub-token != '' }}
       uses: docker/login-action@v4.0.0
       with:
+        registry: ${{ inputs.registry }}
         username: ${{ inputs.dockerhub-username }}
         password: ${{ inputs.dockerhub-token }}
 
